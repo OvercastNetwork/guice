@@ -23,6 +23,7 @@ import com.google.common.collect.Lists;
 import com.google.common.collect.Maps;
 import com.google.common.collect.Multimap;
 import com.google.inject.Binding;
+import com.google.inject.ConfigurationException;
 import com.google.inject.Key;
 import com.google.inject.Stage;
 import com.google.inject.TypeLiteral;
@@ -75,6 +76,7 @@ final class Initializer {
    */
   <T> Initializable<T> requestInjection(
       InjectorImpl injector,
+      TypeLiteral<T> type,
       T instance,
       Binding<T> binding,
       Object source,
@@ -93,15 +95,24 @@ final class Initializer {
       return Initializables.of(instance);
     }
 
+    if (type == null) {
+      type = TypeLiteral.get((Class<T>) instance.getClass());
+    }
+
     if (initializablesCache.containsKey(instance)) {
       @SuppressWarnings("unchecked") // Map from T to InjectableReference<T>
-      Initializable<T> cached = (Initializable<T>) initializablesCache.get(instance);
+          InjectableReference<T> cached = (InjectableReference<T>) initializablesCache.get(instance);
+      if (!cached.type.equals(type)) {
+        new Errors(source).requestInjectionWithDifferentTypes(cached.type, type)
+                          .throwConfigurationExceptionIfErrorsExist();
+      }
       return cached;
     }
 
     InjectableReference<T> injectableReference =
         new InjectableReference<T>(
             injector,
+            type,
             instance,
             binding == null ? null : binding.getKey(),
             provisionCallback,
@@ -157,6 +168,7 @@ final class Initializer {
     private volatile MembersInjectorImpl<T> membersInjector = null;
 
     private final InjectorImpl injector;
+    private final TypeLiteral<T> type;
     private final T instance;
     private final Object source;
     private final Key<T> key;
@@ -165,6 +177,7 @@ final class Initializer {
 
     public InjectableReference(
         InjectorImpl injector,
+        TypeLiteral<T> type,
         T instance,
         Key<T> key,
         ProvisionListenerStackCallback<T> provisionCallback,
@@ -173,19 +186,18 @@ final class Initializer {
       this.injector = injector;
       this.key = key; // possibly null!
       this.provisionCallback = provisionCallback; // possibly null!
+      this.type = checkNotNull(type);
       this.instance = checkNotNull(instance, "instance");
       this.source = checkNotNull(source, "source");
       this.lock = checkNotNull(lock, "lock");
     }
 
     public void validate(Errors errors) throws ErrorsException {
-      @SuppressWarnings("unchecked") // the type of 'T' is a TypeLiteral<T>
-      TypeLiteral<T> type = TypeLiteral.get((Class<T>) instance.getClass());
       membersInjector = injector.membersInjectorStore.get(type, errors.withSource(source));
       Preconditions.checkNotNull(
           membersInjector,
-          "No membersInjector available for instance: %s, from key: %s",
-          instance,
+          "No membersInjector available for type: %s, from key: %s",
+          type,
           key);
       state = InjectableReferenceState.VALIDATED;
     }
